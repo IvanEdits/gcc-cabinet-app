@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Good Choice Cabinet - Full App</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        let currentSection = 'dashboard';
+        let currentRole = null;
+
+        function selectRole(role) {
+            currentRole = role;
+            document.getElementById('leaderDisplay').innerText = role;
+            document.getElementById('userInfo').innerText = role;
+        }
+
+        function show(id) {
+            document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+            const el = document.getElementById(id);
+            if (el) el.classList.add('active');
+            currentSection = id;
+        }
+
+        function previewCustomReceipt(text) {
+            const modal = document.getElementById('receiptModal');
+            document.getElementById('receiptContent').innerText = text;
+            modal.style.display = 'flex';
+            document.getElementById('receiptDownloadBtn').onclick = () => {
+                fetch('/download_receipt', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'text=' + encodeURIComponent(text)
+                }).then(response => response.blob())
+                  .then(blob => {
+                      const url = window.URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'receipt.pdf';
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      window.URL.revokeObjectURL(url);
+                  });
+            };
+        }
+
+        function closeReceipt() {
+            document.getElementById('receiptModal').style.display = 'none';
+        }
+
+        function payBalance(paymentId) {
+            const amt = prompt('Enter amount to pay towards balance');
+            if (!amt) return;
+            const formData = new FormData();
+            formData.append('amount', amt);
+            fetch(`/pay_balance/${paymentId}`, {
+                method: 'POST',
+                body: formData
+            }).then(res => res.json())
+              .then(data => {
+                  if (data.error) alert(data.error);
+                  else {
+                      previewCustomReceipt(data.receipt);
+                      loadData();
+                  }
+              });
+        }
+
+        function payMinisterBalance(minId) {
+            const amt = prompt('Enter amount to pay towards balance');
+            if (!amt) return;
+            const formData = new FormData();
+            formData.append('amount', amt);
+            fetch(`/pay_minister_balance/${minId}`, {
+                method: 'POST',
+                body: formData
+            }).then(res => res.json())
+              .then(data => {
+                  if (data.error) alert(data.error);
+                  else {
+                      previewCustomReceipt(data.receipt);
+                      loadData();
+                  }
+              });
+        }
+
+        function importDataPrompt() {
+            const inFile = document.createElement('input');
+            inFile.type = 'file';
+            inFile.accept = '.json';
+            inFile.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append('file', file);
+                fetch('/import_data', {
+                    method: 'POST',
+                    body: formData
+                }).then(res => res.json())
+                  .then(data => {
+                      alert(data.message || data.error);
+                      if (!data.error) loadData();
+                  });
+            };
+            inFile.click();
+        }
+
+        function clearOldDataPrompt() {
+            const pin = prompt('Enter Finance PIN to refresh/clear selected data');
+            if (!pin) return;
+            if (confirm('Do you want to completely clear ALL stored data? This cannot be undone.')) {
+                fetch('/clear_all_data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'pin=' + encodeURIComponent(pin)
+                }).then(res => res.json())
+                  .then(data => {
+                      alert(data.message || data.error);
+                      if (!data.error) loadData();
+                  });
+            }
+        }
+
+        function renderChart(data) {
+            const ctx = document.getElementById('houseChart').getContext('2d');
+            if (window.gccHouseChart) window.gccHouseChart.destroy();
+            window.gccHouseChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'House Collections',
+                        data: data.data,
+                        backgroundColor: ['#6d4c41', '#8d6e63', '#d32f2f', '#a1887f']
+                    }]
+                },
+                options: {responsive: true, plugins: {legend: {display: false}}}
+            });
+        }
+
+        function loadData() {
+            fetch('/dashboard_data')
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('totalCollected').innerText = data.totalCollected;
+                    document.getElementById('totalExpenditure').innerText = data.totalExpenditure;
+                    document.getElementById('netBalance').innerText = data.netBalance;
+                    document.getElementById('activeLoansCount').innerText = data.activeLoansCount;
+                    renderChart(data.houseChart);
+                });
+
+            const tables = ['payments', 'expenditures', 'loans', 'repayments', 'savings', 'minister_payments', 'incomes', 'attendance', 'duties', 'students', 'messages'];
+            tables.forEach(table => {
+                fetch(`/${table}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        const tbl = document.getElementById(`${table}Table`);
+                        if (!tbl) return;
+                        if (table === 'payments') {
+                            tbl.innerHTML = '<tr><th>Name</th><th>Class</th><th>Stream</th><th>House</th><th>Type</th><th>Term</th><th>Paid</th><th>Required</th><th>Balance</th><th>Date</th><th>Receipt</th><th>Actions</th></tr>';
+                            data.forEach(p => {
+                                const tr = document.createElement('tr');
+                                const receiptText = `Good Choice Cabinet Receipt\n\nPayment\nName: ${p.name}\nClass: ${p.cls}\nStream: ${p.stream}\nHouse: ${p.house}\nPayment Type: ${p.type}\nTerm: ${p.term}\nAmount Paid: ${p.amount.toLocaleString()}\nRequired: ${(p.required || p.amount).toLocaleString()}\nBalance: ${p.balance.toLocaleString()}\nDate: ${p.date} ${p.time || ''}\nTimestamp: new Date().toISOString().replace('T', ' ').split('.')[0]`;
+                                tr.innerHTML = `<td>${p.name}</td><td>${p.cls}</td><td>${p.stream}</td><td>${p.house}</td><td>${p.type}</td><td>${p.term || ''}</td><td>${p.amount.toLocaleString()}</td><td>${(p.required || p.amount).toLocaleString()}</td><td>${p.balance.toLocaleString()}</td><td>${p.date} ${p.time || ''}</td><td><button class="btn" onclick='previewCustomReceipt(\`${receiptText}\`)'>View/Print</button></td><td>${p.balance > 0 ? `<button class="btn" onclick='payBalance("${p.id}")'>Pay Balance</button>` : '<span class="small">Cleared</span>'}</td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'expenditures') {
+                            tbl.innerHTML = '<tr><th>Description</th><th>Amount</th><th>Date</th><th>Receipt</th></tr>';
+                            data.forEach(e => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${e.desc}</td><td>${e.amt.toLocaleString()}</td><td>${e.date} ${e.time || ''}</td><td><button class="btn" onclick='previewCustomReceipt("Expenditure Receipt\nDesc: ${e.desc}\nAmount: ${e.amt.toLocaleString()}\nDate: ${e.date} ${e.time || ''}")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'loans') {
+                            tbl.innerHTML = '<tr><th>Loan ID</th><th>Name</th><th>Principal</th><th>Interest%</th><th>Total</th><th>Remaining</th><th>Status</th><th>Due Date</th><th>Date</th><th>Receipt</th></tr>';
+                            data.forEach(l => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${l.id}</td><td>${l.name}</td><td>${l.principal.toLocaleString()}</td><td>${l.interestPct}</td><td>${l.total.toLocaleString()}</td><td>${l.totalRemaining.toLocaleString()}</td><td>${l.status}</td><td>${l.dueDate}</td><td>${l.date}</td><td><button class="btn" onclick='previewCustomReceipt("Loan Receipt\nLoan ID: ${l.id}\nName: ${l.name}\nPrincipal: ${l.principal.toLocaleString()}\nInterest: ${l.interestPct}%\nRemaining: ${l.totalRemaining.toLocaleString()}\nDue: ${l.dueDate}")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'repayments') {
+                            tbl.innerHTML = '<tr><th>Loan ID</th><th>Name</th><th>Paid</th><th>Balance</th><th>Status</th><th>Date</th><th>Receipt</th></tr>';
+                            data.forEach(r => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${r.loanId}</td><td>${r.name}</td><td>${r.paid.toLocaleString()}</td><td>${r.balance.toLocaleString()}</td><td>${r.balance <= 0 ? 'Cleared' : 'Pending'}</td><td>${r.date}</td><td><button class="btn" onclick='previewCustomReceipt("Loan Repayment\nLoan ID: ${r.loanId}\nName: ${r.name}\nPaid: ${r.paid.toLocaleString()}\nBalance: ${r.balance.toLocaleString()}\nDate: ${r.date}")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'savings') {
+                            tbl.innerHTML = '<tr><th>Name</th><th>Saved</th><th>TermWeeks</th><th>Interest% (if held)</th><th>InterestIfHeld</th><th>DaysScheduled</th><th>Penalty(if early)</th><th>Available(if matured)</th><th>Saved Date</th><th>Sched Withdraw</th><th>Receipt</th></tr>';
+                            data.forEach(s => {
+                                const matured = new Date() >= new Date(s.sched);
+                                const avail = matured ? (s.amount + s.interestIfHeld) : s.amount;
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${s.name}</td><td>${s.amount.toLocaleString()}</td><td>${s.termWeeks}</td><td>${(s.interestPct*100).toFixed(0)}%</td><td>${s.interestIfHeld.toLocaleString()}</td><td>${s.daysScheduled || '-'}</td><td>-</td><td>${avail.toLocaleString()}</td><td>${s.dateSaved}</td><td>${s.sched}</td><td><button class="btn" onclick='previewCustomReceipt("Saving Order\nName: ${s.name}\nAmount: ${s.amount.toLocaleString()}\nTerm: ${s.termWeeks} weeks\nInterest(if held): ${s.interestIfHeld.toLocaleString()}\nSaved: ${s.dateSaved}")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'minister_payments') {
+                            tbl.innerHTML = '<tr><th>Name</th><th>Type</th><th>Required</th><th>Paid</th><th>Balance</th><th>Date</th><th>Receipt</th><th>Actions</th></tr>';
+                            data.forEach(m => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${m.name}</td><td>${m.type}</td><td>${m.required.toLocaleString()}</td><td>${m.paid.toLocaleString()}</td><td>${m.balance.toLocaleString()}</td><td>${m.date}</td><td><button class="btn" onclick='previewCustomReceipt("Minister Payment\nName: ${m.name}\nType: ${m.type}\nPaid: ${m.paid.toLocaleString()}\nRequired: ${m.required.toLocaleString()}\nBalance: ${m.balance.toLocaleString()}\nDate: ${m.date}")'>View/Print</button></td><td>${m.balance > 0 ? `<button class="btn" onclick='payMinisterBalance("${m.id}")'>Pay Balance</button>` : '<span class="small">Cleared</span>'}</td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'incomes') {
+                            tbl.innerHTML = '<tr><th>Source</th><th>Amount</th><th>Date</th><th>Receipt</th></tr>';
+                            data.forEach(i => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${i.source}</td><td>${i.amt.toLocaleString()}</td><td>${i.date} ${i.time || ''}</td><td><button class="btn" onclick='previewCustomReceipt("Income Receipt\nSource: ${i.source}\nAmount: ${i.amt.toLocaleString()}\nDate: ${i.date} ${i.time || ''}")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'attendance') {
+                            tbl.innerHTML = '<tr><th>Name</th><th>Role</th><th>Date</th><th>Time</th><th>Status</th><th>Fine (UGX)</th><th>Receipt</th></tr>';
+                            data.forEach(a => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${a.name}</td><td>${a.role}</td><td>${a.date}</td><td>${a.time}</td><td>${a.status}</td><td>${(a.fine || 0).toLocaleString()}</td><td><button class="btn" onclick='previewCustomReceipt("Attendance Receipt\nName: ${a.name}\nRole: ${a.role}\nDate: ${a.date}\nTime: ${a.time}\nStatus: ${a.status}\nFine: ${(a.fine || 0).toLocaleString()}\nTimestamp: new Date().toISOString().replace('T', ' ').split('.')[0]")'>View/Print</button></td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'duties') {
+                            tbl.innerHTML = '<tr><th>Minister</th><th>Role</th><th>Duty</th><th>Week Starting</th></tr>';
+                            data.forEach(d => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${d.name}</td><td>${d.role}</td><td>${d.task}</td><td>${d.week}</td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'students') {
+                            tbl.innerHTML = '<tr><th>Name</th><th>Class</th><th>Stream</th><th>House</th><th>Date</th></tr>';
+                            data.forEach(s => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${s.name}</td><td>${s.cls}</td><td>${s.stream}</td><td>${s.house}</td><td>${s.date}</td>`;
+                                tbl.appendChild(tr);
+                            });
+                        } else if (table === 'messages') {
+                            tbl.innerHTML = '<tr><th>From</th><th>To</th><th>Message</th><th>Date</th></tr>';
+                            data.forEach(m => {
+                                const tr = document.createElement('tr');
+                                tr.innerHTML = `<td>${m.from_user}</td><td>${m.to_user}</td><td>${m.content}</td><td>${m.date} ${m.time || ''}</td>`;
+                                tbl.appendChild(tr);
+                            });
+                        }
+                    });
+            });
+        }
+
+        window.onload = function() {
+            {% if logged_in %}
+            loadData();
+            document.getElementById('loginBox').style.display = 'none';
+            document.getElementById('navBar').style.display = 'flex';
+            document.getElementById('logoutBtn').style.display = 'inline-block';
+            {% endif %}
+        };
+    </script>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span class="logo">GCC</span>
+            <div>
+                <h1 style="margin:0">Good Choice Cabinet</h1>
+                <small style="color:#fff3e0">Governance with Technology — Leadership with Technology</small>
+            </div>
+        </div>
+        <div style="position:relative">
+            <div id="userInfo" style="color:#fff; font-weight:700; padding-right:80px">{{ role if logged_in else '' }}</div>
+            {% if logged_in %}
+            <a href="{{ url_for('logout') }}"><button class="logout" id="logoutBtn">Logout</button></a>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="container">
+        {% if not logged_in %}
+        <div class="login-box" id="loginBox">
+            <h2>Leader Login</h2>
+            <p class="slogan">Leadership with Technology</p>
+            <form action="{{ url_for('login') }}" method="post">
+                <div class="role-buttons">
+                    <button type="button" class="role-President" onclick="selectRole('President')">President</button>
+                    <button type="button" class="role-PrimeMinister" onclick="selectRole('PrimeMinister')">Prime Minister</button>
+                    <button type="button" class="role-Finance" onclick="selectRole('Finance')">Finance Minister</button>
+                    <button type="button" class="role-Skills" onclick="selectRole('Skills')">Skills Minister</button>
+                    <button type="button" class="role-Notice" onclick="selectRole('Notice')">Notice Board</button>
+                    <button type="button" class="role-ChiefJustice" onclick="selectRole('ChiefJustice')">Chief Justice</button>
+                    <button type="button" class="role-PermanentSec" onclick="selectRole('PermanentSec')">Permanent Secretary</button>
+                    <button type="button" class="role-Patron" onclick="selectRole('Patron')">Patron</button>
+                    <button type="button" class="role-VicePresident" onclick="selectRole('VicePresident')">Vice President</button>
+                </div>
+                <input type="hidden" name="role" id="roleInput">
+                <input type="password" name="pin" id="pin" placeholder="Enter PIN">
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                    <button type="submit" class="loginBtn">Login</button>
+                </div>
+            </form>
+            {% with messages = get_flashed_messages() %}
+            {% if messages %}
+            <div style="color: red; margin-top: 10px;">
+                {% for message in messages %}
+                <p>{{ message }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endwith %}
+        </div>
+        {% else %}
+        <nav id="navBar">
+            <span onclick="show('dashboard')">Dashboard</span>
+            <span onclick="show('payments')">Payments</span>
+            <span onclick="show('expenditure')">Expenditure</span>
+            <span onclick="show('loans')">Loans</span>
+            <span onclick="show('savings')">Savings</span>
+            <span onclick="show('ministerPayments')">Minister Payments</span>
+            <span onclick="show('budget')">Budget & Income</span>
+            <span onclick="show('pmPanel')">PM Panel</span>
+            <span onclick="show('admin')">Admin</span>
+        </nav>
+
+        <section id="dashboard" class="active">
+            <h2>Dashboard - <span id="leaderDisplay">{{ role }}</span></h2>
+            <canvas id="houseChart" style="max-width:700px"></canvas>
+            <div style="margin-top:12px">
+                <strong>Net Balance:</strong> UGX <span id="netBalance">0</span>
+                <div class="small">(Total collections minus expenditures and outstanding loans)</div>
+            </div>
+            <div class="notice-board">
+                <strong>Quick summary</strong><br>
+                Total Collected: UGX <span id="totalCollected">0</span><br>
+                Total Expenditure: UGX <span id="totalExpenditure">0</span><br>
+                Active Loans: <span id="activeLoansCount">0</span>
+            </div>
+        </section>
+
+        <section id="payments">
+            <h2>Payments (House fee, Jersey, Fine, Tags, T-Shirt, Membership)</h2>
+            <form action="{{ url_for('add_payment') }}" method="post">
+                <div class="inline-row">
+                    <div style="flex:1">
+                        <label>Name</label><input name="name" id="p_name" type="text" />
+                        <label>Class</label>
+                        <select name="class" id="p_class">
+                            <option value="">--Select Class--</option>
+                            <option>Form 1</option><option>Form 2</option><option>Form 3</option>
+                            <option>Form 4</option><option>Form 5</option><option>Form 6</option>
+                        </select>
+                        <label>Stream</label><select name="stream" id="p_stream"><option>A</option><option>B</option><option>C</option></select>
+                        <label>House</label><select name="house" id="p_house"><option>Onyx</option><option>Chrysotile</option><option>Phinix</option><option>Anonymous</option></select>
+                    </div>
+                    <div style="flex:1">
+                        <label>Payment For</label>
+                        <select name="type" id="p_type">
+                            <option value="">--Select--</option>
+                            <option value="House Fee">House Fee (UGX 10,000)</option>
+                            <option value="Jersey">Jersey (UGX 35,000)</option>
+                            <option value="Fine">Fine (variable)</option>
+                            <option value="Tag">Tag (UGX 13,000)</option>
+                            <option value="T-Shirt">T-Shirt (UGX 25,000)</option>
+                            <option value="Membership">Membership (UGX 15,000)</option>
+                        </select>
+                        <label>Term</label><select name="term" id="p_term"><option>Term I</option><option>Term II</option><option>Term III</option></select>
+                        <label>Amount (UGX)</label><input name="amount" id="p_amount" type="number" placeholder="Amount paid"/>
+                    </div>
+                </div>
+                <label>Date</label><input name="date" id="p_date" type="date" />
+                <div style="display:flex; gap:10px;">
+                    <button type="submit" class="btn">Submit Payment</button>
+                    <button type="button" class="backDash" onclick="show('dashboard')">Back to Dashboard</button>
+                </div>
+            </form>
+            <table id="paymentsTable">
+                <tr><th>Name</th><th>Class</th><th>Stream</th><th>House</th><th>Type</th><th>Term</th><th>Paid</th><th>Required</th><th>Balance</th><th>Date</th><th>Receipt</th><th>Actions</th></tr>
+            </table>
+        </section>
+
+        <section id="expenditure">
+            <h2>Expenditure</h2>
+            <form action="{{ url_for('add_expenditure') }}" method="post">
+                <label>Description</label><input name="desc" id="e_desc" type="text" />
+                <label>Amount (UGX)</label><input name="amount" id="e_amount" type="number" />
+                <label>Date</label><input name="date" id="e_date" type="date" />
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn">Record Expenditure</button>
+                    <button type="button" class="backDash" onclick="show('dashboard')">Back to Dashboard</button>
+                </div>
+            </form>
+            <table id="expTable"><tr><th>Description</th><th>Amount</th><th>Date</th><th>Receipt</th></tr></table>
+        </section>
+
+        <section id="loans">
+            <h2>Loans</h2>
+            <form action="{{ url_for('add_loan') }}" method="post">
+                <label>Loan ID</label><input name="id" id="l_id" type="text" />
+                <label>Name</label><input name="name" id="l_name" type="text" />
+                <label>Amount (UGX)</label><input name="amount" id="l_amount" type="number" />
+                <label>Interest % (applied to principal when creating; default 10%)</label><input name="interest" id="l_interest" type="number" value="10" />
+                <label>Repayment Due Date</label><input name="due_date" id="l_due_date" type="date" />
+                <label>Date (Disbursement)</label><input name="date" id="l_date" type="date" />
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn">Create & Disburse Loan</button>
+                    <button type="button" class="backDash" onclick="show('dashboard')">Back to Dashboard</button>
+                </div>
+            </form>
+            <table id="loansTable"><tr><th>Loan ID</th><th>Name</th><th>Principal</th><th>Interest%</th><th>Total</th><th>Remaining</th><th>Status</th><th>Due Date</th><th>Date</th><th>Receipt</th></tr></table>
+            <h3 style="margin-top:12px">Repay Loan</h3>
+            <form action="{{ url_for('repay_loan') }}" method="post">
+                <label>Loan ID</label><input name="id" id="repayLoanId" type="text" />
+                <label>Name</label><input name="name" id="repayLoanName" type="text" />
+                <label>Amount to Repay</label><input name="amount" id="repayLoanAmount" type="number" />
+                <label>Date</label><input name="date" id="repayLoanDate" type="date" />
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn">Repay Loan</button>
+                </div>
+            </form>
+            <table id="repayTable"><tr><th>Loan ID</th><th>Name</th><th>Paid</th><th>Balance</th><th>Status</th><th>Date</th><th>Receipt</th></tr></table>
+        </section>
+
+        <section id="savings">
+            <h2>Savings & Withdrawals</h2>
+            <form action="{{ url_for('add_saving') }}" method="post">
+                <label>Client Name</label><input name="name" id="s_name" type="text" />
+                <label>Amount (UGX) - Minimum 10,000</label><input name="amount" id="s_amount" type="number" />
+                <label>Date Saved</label><input name="date" id="s_date" type="date" />
+                <label>Scheduled Withdraw Date</label><input name="sched" id="s_sched" type="date" />
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn">Save</button>
+                    <button type="button" class="btn" onclick="show('dashboard')">Back to Dashboard</button>
+                </div>
+            </form>
+            <h3 style="margin-top:18px">Withdraw</h3>
